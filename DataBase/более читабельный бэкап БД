@@ -1,0 +1,889 @@
+--
+-- PostgreSQL database dump
+--
+
+-- Dumped from database version 15.3
+-- Dumped by pg_dump version 15.3
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: combined_function(bigint, bigint, bigint, bigint[], bigint[]); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.combined_function(id_client bigint, id_arrival_timetable bigint, id_departure_timetable bigint, id_place_arr bigint[], id_person bigint[]) RETURNS TABLE(booking_id bigint, boughtplace_id bigint)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    booking_id BIGINT;
+    boughtplace_ids BIGINT[];
+	temp_booking_id bigint;
+BEGIN
+    -- Проверка условия
+    WITH check_places AS (
+        SELECT bp.id_place
+        FROM boughtplace bp
+        JOIN (
+            SELECT DISTINCT b.id_booking
+            FROM booking b
+            JOIN (
+                SELECT tim.id_timetable
+                FROM timetable ta
+                JOIN timetable td ON td.id_timetable = id_arrival_timetable
+                JOIN station sa ON ta.id_station = sa.id_station
+                JOIN station sd ON td.id_station = sd.id_station
+                JOIN station s ON s.serial_number_station BETWEEN sa.serial_number_station AND sd.serial_number_station
+                JOIN timetable tim ON tim.id_station = s.id_station
+                WHERE ta.id_timetable = id_departure_timetable
+            ) sub ON sub.id_timetable = b.id_arrival_timetable OR sub.id_timetable = b.id_departure_timetable
+        ) zak ON zak.id_booking = bp.id_booking
+        WHERE bp.id_place = ANY(id_place_arr)
+    )
+    SELECT array_agg(id_place) INTO boughtplace_ids FROM check_places;
+
+    -- Если проверка вернула значения, вернуть их
+	IF boughtplace_ids IS NOT NULL THEN
+    	RETURN QUERY
+    	SELECT -1::bigint AS booking_id, unnest(boughtplace_ids) AS boughtplace_id;
+		RETURN;
+	END IF;
+
+
+    -- Выполняем insert_booking и получаем id_booking
+    booking_id := insert_booking(id_client, id_arrival_timetable, id_departure_timetable);
+
+    -- Выполняем insert_boughtplace и получаем id_boughtplace
+    boughtplace_ids := ARRAY(Select * from insert_boughtplace(booking_id, id_place_arr));
+
+    -- Выполняем insert_booking_person
+    PERFORM insert_booking_person(booking_id, id_person);
+
+    -- Возвращаем значения id_boughtplace
+	temp_booking_id := booking_id;
+    RETURN QUERY
+    SELECT temp_booking_id, unnest(boughtplace_ids) AS boughtplace_id;
+	RETURN;
+END;
+$$;
+
+
+ALTER FUNCTION public.combined_function(id_client bigint, id_arrival_timetable bigint, id_departure_timetable bigint, id_place_arr bigint[], id_person bigint[]) OWNER TO postgres;
+
+--
+-- Name: insert_booking(bigint, bigint, bigint); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.insert_booking(id_client bigint, id_arrival_timetable bigint, id_departure_timetable bigint) RETURNS bigint
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    booking_id BIGINT;
+BEGIN
+    INSERT INTO booking (id_client, id_arrival_timetable, id_departure_timetable)
+    VALUES (id_client, id_arrival_timetable, id_departure_timetable)
+    RETURNING id_booking INTO booking_id;
+
+    RETURN booking_id;
+END;
+$$;
+
+
+ALTER FUNCTION public.insert_booking(id_client bigint, id_arrival_timetable bigint, id_departure_timetable bigint) OWNER TO postgres;
+
+--
+-- Name: insert_booking_person(bigint, bigint[]); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.insert_booking_person(id_booking bigint, id_person bigint[]) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    person_id BIGINT;
+BEGIN
+    FOREACH person_id IN ARRAY id_person
+    LOOP
+        INSERT INTO booking_person (id_booking, id_person)
+        VALUES (id_booking, person_id);
+    END LOOP;
+END;
+$$;
+
+
+ALTER FUNCTION public.insert_booking_person(id_booking bigint, id_person bigint[]) OWNER TO postgres;
+
+--
+-- Name: insert_boughtplace(bigint, bigint[]); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.insert_boughtplace(id_booking bigint, id_place bigint[]) RETURNS SETOF bigint
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    boughtplace_id BIGINT;
+    i INT;
+BEGIN
+    FOR i IN 1..array_length(id_place, 1)
+    LOOP
+        INSERT INTO boughtplace (id_booking, id_place)
+        VALUES (id_booking, id_place[i])
+        RETURNING id_boughtplace INTO boughtplace_id;
+
+        -- Возвращаем boughtplace_id с помощью SETOF
+        RETURN NEXT boughtplace_id;
+    END LOOP;
+
+    RETURN;
+END;
+$$;
+
+
+ALTER FUNCTION public.insert_boughtplace(id_booking bigint, id_place bigint[]) OWNER TO postgres;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: booking; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.booking (
+    id_booking bigint NOT NULL,
+    id_client bigint NOT NULL,
+    timedate_booking timestamp without time zone DEFAULT now(),
+    id_arrival_timetable bigint NOT NULL,
+    id_departure_timetable bigint NOT NULL
+);
+
+
+ALTER TABLE public.booking OWNER TO postgres;
+
+--
+-- Name: booking_id_booking_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.booking_id_booking_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.booking_id_booking_seq OWNER TO postgres;
+
+--
+-- Name: booking_id_booking_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.booking_id_booking_seq OWNED BY public.booking.id_booking;
+
+
+--
+-- Name: booking_person; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.booking_person (
+    id_booking bigint NOT NULL,
+    id_person bigint NOT NULL
+);
+
+
+ALTER TABLE public.booking_person OWNER TO postgres;
+
+--
+-- Name: boughtplace; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.boughtplace (
+    id_boughtplace bigint NOT NULL,
+    id_place bigint NOT NULL,
+    id_booking bigint NOT NULL
+);
+
+
+ALTER TABLE public.boughtplace OWNER TO postgres;
+
+--
+-- Name: boughtplace_id_boughtplace_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.boughtplace_id_boughtplace_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.boughtplace_id_boughtplace_seq OWNER TO postgres;
+
+--
+-- Name: boughtplace_id_boughtplace_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.boughtplace_id_boughtplace_seq OWNED BY public.boughtplace.id_boughtplace;
+
+
+--
+-- Name: client; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.client (
+    id_client bigint NOT NULL,
+    id_person bigint NOT NULL
+);
+
+
+ALTER TABLE public.client OWNER TO postgres;
+
+--
+-- Name: person; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.person (
+    id_person bigint NOT NULL,
+    firstname_person character varying(50) NOT NULL,
+    lastname_person character varying(50) NOT NULL,
+    patronymic_person character varying(50),
+    seriespassport_person character varying(4),
+    numberpassport_person character varying(6),
+    date_person date
+);
+
+
+ALTER TABLE public.person OWNER TO postgres;
+
+--
+-- Name: place; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.place (
+    id_place bigint NOT NULL,
+    id_wagon bigint NOT NULL,
+    number_place integer NOT NULL,
+    id_placetype integer NOT NULL
+);
+
+
+ALTER TABLE public.place OWNER TO postgres;
+
+--
+-- Name: placetype; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.placetype (
+    id_placetype integer NOT NULL,
+    name_placetype character varying(10),
+    description_placetype character varying(100),
+    standart_placetype numeric(10,2),
+    preferential_placetype numeric(10,2),
+    discount_placetype numeric(10,2)
+);
+
+
+ALTER TABLE public.placetype OWNER TO postgres;
+
+--
+-- Name: railwaystation; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.railwaystation (
+    id_railwaystation bigint NOT NULL,
+    localityname_railwaystation character varying(100),
+    name_railwaystation character varying(100),
+    platform_railwaystation character varying(10),
+    timezone_railwaystation integer
+);
+
+
+ALTER TABLE public.railwaystation OWNER TO postgres;
+
+--
+-- Name: route; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.route (
+    id_route bigint NOT NULL,
+    name_route character varying(100),
+    id_train bigint
+);
+
+
+ALTER TABLE public.route OWNER TO postgres;
+
+--
+-- Name: station; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.station (
+    id_station bigint NOT NULL,
+    serial_number_station integer NOT NULL,
+    id_route bigint NOT NULL,
+    id_railwaystation integer NOT NULL
+);
+
+
+ALTER TABLE public.station OWNER TO postgres;
+
+--
+-- Name: timetable; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.timetable (
+    id_timetable bigint NOT NULL,
+    id_station bigint NOT NULL,
+    timedatearrival_timetable timestamp without time zone,
+    timedatedepartyre_timetable timestamp without time zone,
+    platform_timestamp character varying(10)
+);
+
+
+ALTER TABLE public.timetable OWNER TO postgres;
+
+--
+-- Name: train; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.train (
+    id_train bigint NOT NULL,
+    number_train character varying(10),
+    type_train character varying(100),
+    numberfromhead_train boolean
+);
+
+
+ALTER TABLE public.train OWNER TO postgres;
+
+--
+-- Name: wagon; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.wagon (
+    id_wagon bigint NOT NULL,
+    number_wagon character varying(10),
+    id_train bigint
+);
+
+
+ALTER TABLE public.wagon OWNER TO postgres;
+
+--
+-- Name: booking id_booking; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking ALTER COLUMN id_booking SET DEFAULT nextval('public.booking_id_booking_seq'::regclass);
+
+
+--
+-- Name: boughtplace id_boughtplace; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.boughtplace ALTER COLUMN id_boughtplace SET DEFAULT nextval('public.boughtplace_id_boughtplace_seq'::regclass);
+
+
+--
+-- Data for Name: booking; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.booking (id_booking, id_client, timedate_booking, id_arrival_timetable, id_departure_timetable) FROM stdin;
+2	2	2023-07-14 11:32:14	1	2
+3	1	2023-07-26 23:22:08.334527	1	2
+4	1	2023-07-26 23:22:08.334527	1	2
+15	1	2023-07-27 22:11:53.546623	5	1
+\.
+
+
+--
+-- Data for Name: booking_person; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.booking_person (id_booking, id_person) FROM stdin;
+15	4
+15	5
+\.
+
+
+--
+-- Data for Name: boughtplace; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.boughtplace (id_boughtplace, id_place, id_booking) FROM stdin;
+2	2	2
+3	3	2
+34	4	15
+35	5	15
+\.
+
+
+--
+-- Data for Name: client; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.client (id_client, id_person) FROM stdin;
+1	1
+2	2
+3	4
+4	3
+5	5
+6	6
+7	7
+8	8
+9	9
+10	10
+\.
+
+
+--
+-- Data for Name: person; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.person (id_person, firstname_person, lastname_person, patronymic_person, seriespassport_person, numberpassport_person, date_person) FROM stdin;
+1	Виктор	Семянин	Власович	4610	284202	1998-03-26
+2	Валерий	Щербатых	Савванович	4464	333873	1987-03-15
+3	Кира	Этуш	Федоровна	4633	963758	2001-07-04
+5	Николай	Ушаков	Семенович	4221	337046	1978-10-20
+4	Геннадий	Валиев	Витальевич	4991	641961	1976-06-11
+6	Максим	Меркушев	Семенович	4168	360393	1996-01-13
+7	Нонна	Васильева	Прохор	4364	685192	1971-04-18
+8	Настасья	Яблокова	Лльвона	\N	\N	2008-03-15
+9	Лаврентий	Пушкарёв	Павлович	\N	\N	2005-02-04
+10	Максим	Чечёткин	Всеволодович	\N	\N	2002-06-28
+11	Алиса	Шаталова	Никаноровна	\N	\N	1986-04-21
+12	Нина	Ельчукова	Игнатьевна	\N	\N	1996-11-01
+13	Лана	Ефимова	Никаноровна	\N	\N	2005-02-28
+14	Георгий	Молодых	Акимович	\N	\N	1974-02-20
+15	Валентина	Кунаева	Гаврннловна	\N	\N	2015-05-22
+16	Михаил	Сурнин	Даниилович	\N	\N	1987-12-07
+17	Иван	Шевелёк	Тимофеевич	\N	\N	2007-10-01
+18	Марина	Никитина	Егоровна	\N	\N	1990-12-03
+19	Марьямна	Живенкова	Ефремовна	\N	\N	2000-08-01
+20	Тимофей	Нотович	Николаевич	\N	\N	2020-02-06
+\.
+
+
+--
+-- Data for Name: place; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.place (id_place, id_wagon, number_place, id_placetype) FROM stdin;
+1	1	1	1
+2	1	2	1
+3	1	3	1
+4	1	4	1
+5	1	5	1
+6	1	6	1
+7	1	7	1
+8	1	8	1
+9	1	9	1
+10	1	10	1
+11	1	11	1
+12	1	12	1
+13	1	13	1
+\.
+
+
+--
+-- Data for Name: placetype; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.placetype (id_placetype, name_placetype, description_placetype, standart_placetype, preferential_placetype, discount_placetype) FROM stdin;
+1	плацкарт	верхняя полка	2300.00	1900.00	2100.00
+2	плацкарт	нижняя полка	2100.00	1990.00	2010.99
+\.
+
+
+--
+-- Data for Name: railwaystation; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.railwaystation (id_railwaystation, localityname_railwaystation, name_railwaystation, platform_railwaystation, timezone_railwaystation) FROM stdin;
+1	Анапа	Киевский	\N	\N
+2	\N	9 км	\N	\N
+3	\N	Абинская	\N	\N
+4	\N	Ильская	\N	\N
+5	\N	Афинская	\N	\N
+6	Краснодар	Краснодар-1	\N	\N
+7	Краснодар	Краснодар-2	\N	\N
+8	\N	Тимашевский обход	\N	\N
+9	\N	Брюховецкая	\N	\N
+10	\N	Каневская	\N	\N
+11	\N	Староминская-Тимаш	\N	\N
+12	\N	Васильево-Петрвоская	\N	\N
+13	Ростов	Ростов-Главный	\N	\N
+14	\N	Новечркасск	\N	\N
+15	\N	Шахтная	\N	\N
+16	\N	Сулин	\N	\N
+17	\N	Зверево	\N	\N
+18	\N	Лихая	\N	\N
+19	\N	Каменская	\N	\N
+20	\N	Миллерово	\N	\N
+21	\N	Кутейникова	\N	\N
+22	\N	Россошь	\N	\N
+23	\N	Лиски	\N	\N
+24	\N	Масловка	\N	\N
+25	\N	Придача (Воронеж-Южный)	\N	\N
+26	\N	Отрожка	\N	\N
+32	\N	Бирюлёво-Тов	\N	\N
+28	\N	Елец	\N	\N
+29	\N	Ефремов	\N	\N
+30	\N	Узловая-1	\N	\N
+31	\N	Ожерелье	\N	\N
+33	Москва	Москва (Восточный вокзал)	\N	\N
+27	Липецк	Липецк	\N	\N
+\.
+
+
+--
+-- Data for Name: route; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.route (id_route, name_route, id_train) FROM stdin;
+1	Аннапа-Питер	1
+\.
+
+
+--
+-- Data for Name: station; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.station (id_station, serial_number_station, id_route, id_railwaystation) FROM stdin;
+1	1	1	1
+2	2	1	2
+3	3	1	3
+4	4	1	4
+5	5	1	5
+6	6	1	6
+7	7	1	7
+8	8	1	8
+9	9	1	9
+10	10	1	10
+11	11	1	11
+12	12	1	12
+13	13	1	13
+14	14	1	14
+15	15	1	15
+16	16	1	16
+17	17	1	17
+18	18	1	18
+19	19	1	19
+20	20	1	20
+23	23	1	23
+24	24	1	24
+25	25	1	25
+26	26	1	26
+27	27	1	27
+28	28	1	28
+29	29	1	29
+30	30	1	30
+31	31	1	31
+32	32	1	32
+22	22	1	22
+21	21	1	21
+33	33	1	33
+\.
+
+
+--
+-- Data for Name: timetable; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.timetable (id_timetable, id_station, timedatearrival_timetable, timedatedepartyre_timetable, platform_timestamp) FROM stdin;
+1	1	2023-08-25 23:43:00	2023-08-25 00:38:00	2A
+2	2	2023-08-26 00:56:00	2023-08-26 01:32:00	3
+3	3	2023-08-26 02:02:00	2023-08-26 02:04:00	2A
+4	4	2023-08-26 02:38:00	2023-08-26 02:56:00	\N
+5	5	2023-08-26 03:16:00	2023-08-26 03:20:00	\N
+6	6	2023-08-26 03:47:00	2023-08-26 03:59:00	\N
+7	7	2023-08-26 04:14:00	2023-08-26 04:20:00	\N
+8	8	2023-08-26 06:05:00	2023-08-26 06:33:00	\N
+9	9	2023-08-26 06:53:00	2023-08-26 03:55:00	\N
+10	10	2023-08-26 07:27:00	2023-08-26 07:29:00	\N
+11	11	2023-08-26 08:15:00	2023-08-26 08:20:00	\N
+12	12	2023-08-26 09:10:00	2023-08-26 09:28:00	\N
+13	13	2023-08-26 10:20:00	2023-08-26 10:48:00	\N
+14	14	2023-08-26 11:44:00	2023-08-26 11:46:00	\N
+15	15	2023-08-26 12:27:00	2023-08-26 12:29:00	\N
+16	16	2023-08-26 12:58:00	2023-08-26 13:00:00	\N
+17	17	2023-08-26 13:21:00	2023-08-26 13:23:00	\N
+18	18	2023-08-26 13:48:00	2023-08-26 14:02:00	\N
+19	19	2023-08-26 14:28:00	2023-08-26 14:30:00	\N
+20	20	2023-08-26 15:26:00	2023-08-26 15:28:00	\N
+21	21	2023-08-26 16:20:00	2023-08-26 16:22:00	\N
+22	22	2023-08-26 17:57:00	2023-08-26 18:13:00	\N
+23	23	2023-08-26 19:58:00	2023-08-26 20:00:00	\N
+24	24	2023-08-26 20:58:00	2023-08-26 21:23:00	\N
+25	25	2023-08-26 21:37:00	2023-08-26 21:41:00	\N
+26	26	2023-08-26 21:58:00	2023-08-26 22:10:00	\N
+27	27	2023-08-27 00:15:00	2023-08-27 00:25:00	\N
+28	28	2023-08-27 01:50:00	2023-08-27 02:22:00	\N
+29	29	2023-08-27 03:58:00	2023-08-27 04:00:00	\N
+30	30	2023-08-27 06:08:00	2023-08-27 06:13:00	\N
+31	31	2023-08-27 07:48:00	2023-08-27 08:20:00	\N
+32	32	2023-08-27 10:04:00	2023-08-27 10:13:00	\N
+33	33	2023-08-27 11:07:00	2023-08-27 11:26:00	\N
+\.
+
+
+--
+-- Data for Name: train; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.train (id_train, number_train, type_train, numberfromhead_train) FROM stdin;
+1	219A	Победа	t
+2	199Б	обычный 	f
+\.
+
+
+--
+-- Data for Name: wagon; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.wagon (id_wagon, number_wagon, id_train) FROM stdin;
+1	3	1
+\.
+
+
+--
+-- Name: booking_id_booking_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.booking_id_booking_seq', 15, true);
+
+
+--
+-- Name: boughtplace_id_boughtplace_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.boughtplace_id_boughtplace_seq', 35, true);
+
+
+--
+-- Name: booking booking_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking
+    ADD CONSTRAINT booking_pkey PRIMARY KEY (id_booking);
+
+
+--
+-- Name: boughtplace boughtplace_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.boughtplace
+    ADD CONSTRAINT boughtplace_pkey PRIMARY KEY (id_boughtplace);
+
+
+--
+-- Name: client client_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.client
+    ADD CONSTRAINT client_pkey PRIMARY KEY (id_client);
+
+
+--
+-- Name: person person_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.person
+    ADD CONSTRAINT person_pkey PRIMARY KEY (id_person);
+
+
+--
+-- Name: place place_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.place
+    ADD CONSTRAINT place_pkey PRIMARY KEY (id_place);
+
+
+--
+-- Name: placetype placetype_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.placetype
+    ADD CONSTRAINT placetype_pkey PRIMARY KEY (id_placetype);
+
+
+--
+-- Name: railwaystation railwaystation_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.railwaystation
+    ADD CONSTRAINT railwaystation_pkey PRIMARY KEY (id_railwaystation);
+
+
+--
+-- Name: route route_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.route
+    ADD CONSTRAINT route_pkey PRIMARY KEY (id_route);
+
+
+--
+-- Name: station station_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.station
+    ADD CONSTRAINT station_pkey PRIMARY KEY (id_station);
+
+
+--
+-- Name: timetable timetable_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.timetable
+    ADD CONSTRAINT timetable_pkey PRIMARY KEY (id_timetable);
+
+
+--
+-- Name: train train_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.train
+    ADD CONSTRAINT train_pkey PRIMARY KEY (id_train);
+
+
+--
+-- Name: wagon wagon_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.wagon
+    ADD CONSTRAINT wagon_pkey PRIMARY KEY (id_wagon);
+
+
+--
+-- Name: booking fk_booking_client; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking
+    ADD CONSTRAINT fk_booking_client FOREIGN KEY (id_client) REFERENCES public.client(id_client);
+
+
+--
+-- Name: booking_person fk_booking_person_booking; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking_person
+    ADD CONSTRAINT fk_booking_person_booking FOREIGN KEY (id_booking) REFERENCES public.booking(id_booking) ON DELETE CASCADE;
+
+
+--
+-- Name: booking_person fk_booking_person_person; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking_person
+    ADD CONSTRAINT fk_booking_person_person FOREIGN KEY (id_person) REFERENCES public.person(id_person);
+
+
+--
+-- Name: booking fk_booking_timetable1; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking
+    ADD CONSTRAINT fk_booking_timetable1 FOREIGN KEY (id_arrival_timetable) REFERENCES public.timetable(id_timetable);
+
+
+--
+-- Name: booking fk_booking_timetable2; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.booking
+    ADD CONSTRAINT fk_booking_timetable2 FOREIGN KEY (id_departure_timetable) REFERENCES public.timetable(id_timetable);
+
+
+--
+-- Name: boughtplace fk_boughtplace_booking; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.boughtplace
+    ADD CONSTRAINT fk_boughtplace_booking FOREIGN KEY (id_booking) REFERENCES public.booking(id_booking) ON DELETE CASCADE;
+
+
+--
+-- Name: boughtplace fk_boughtplace_place; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.boughtplace
+    ADD CONSTRAINT fk_boughtplace_place FOREIGN KEY (id_place) REFERENCES public.place(id_place);
+
+
+--
+-- Name: client fk_client_person; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.client
+    ADD CONSTRAINT fk_client_person FOREIGN KEY (id_person) REFERENCES public.person(id_person);
+
+
+--
+-- Name: place fk_place_placetype; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.place
+    ADD CONSTRAINT fk_place_placetype FOREIGN KEY (id_placetype) REFERENCES public.placetype(id_placetype);
+
+
+--
+-- Name: place fk_place_wagon; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.place
+    ADD CONSTRAINT fk_place_wagon FOREIGN KEY (id_wagon) REFERENCES public.wagon(id_wagon);
+
+
+--
+-- Name: route fk_route_train; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.route
+    ADD CONSTRAINT fk_route_train FOREIGN KEY (id_train) REFERENCES public.train(id_train);
+
+
+--
+-- Name: station fk_station_railwaystation; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.station
+    ADD CONSTRAINT fk_station_railwaystation FOREIGN KEY (id_railwaystation) REFERENCES public.railwaystation(id_railwaystation);
+
+
+--
+-- Name: station fk_station_route; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.station
+    ADD CONSTRAINT fk_station_route FOREIGN KEY (id_route) REFERENCES public.route(id_route);
+
+
+--
+-- Name: timetable fk_timetable_station; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.timetable
+    ADD CONSTRAINT fk_timetable_station FOREIGN KEY (id_station) REFERENCES public.station(id_station);
+
+
+--
+-- Name: wagon fk_wagon_train; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.wagon
+    ADD CONSTRAINT fk_wagon_train FOREIGN KEY (id_train) REFERENCES public.train(id_train);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
