@@ -17,7 +17,7 @@ public class Response {
 
     public Response(String error, String debugMessage) {
         this.error = error;
-        this.debugMessage = debugMessage ;
+        this.debugMessage = debugMessage;
     }
 
     public String getError() {

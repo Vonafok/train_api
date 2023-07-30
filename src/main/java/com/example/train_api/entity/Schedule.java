@@ -14,10 +14,6 @@ public class Schedule {
     Long id_time_arrival;
 
 
-
-
-
-
     public Schedule(String name_arrival, String name_departure, Long id_route, String type_train, Timestamp time_departure, Timestamp time_arrival) {
         this.name_arrival = name_arrival;
         this.name_departure = name_departure;
@@ -26,7 +22,8 @@ public class Schedule {
         this.time_departure = time_departure;
         this.time_arrival = time_arrival;
     }
-    public Schedule(){
+
+    public Schedule() {
 
     }
 

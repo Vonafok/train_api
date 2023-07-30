@@ -17,16 +17,19 @@ public class GeneralExeptionHandle {
         Response response = new Response(e.getMessage());
         return new ResponseEntity<>(response, HttpStatus.NOT_FOUND);
     }
+
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)//400
     public ResponseEntity<Response> handleDataFormatError(MethodArgumentTypeMismatchException ex) {
         Response response = new Response("Ошибка в формате переданного значения: " + ex.getMessage());
         return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
     }
+
     @ExceptionHandler(BadRequestExeption.class)//400
     public ResponseEntity<Response> handleDefaultException(BadRequestExeption e) {
         Response response = new Response(e.getMessage());
         return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
     }
+
     @ExceptionHandler(DataAccessException.class)//500
     public ResponseEntity<Response> handleDataAccessException(DataAccessException e) {
         Response response = new Response("Ошибка при выполнении запроса в БД", e.getMessage());

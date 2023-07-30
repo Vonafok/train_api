@@ -1,7 +1,6 @@
 package com.example.train_api.repos.mapper;
 
 
-
 import com.example.train_api.entity.Ticket;
 import org.springframework.jdbc.core.RowMapper;
 
